@@ -98,15 +98,23 @@ resource "aws_autoscaling_group" "web_asg" {
 
   launch_template {
     id      = aws_launch_template.web_lt.id
-    version = "$Latest" # Esto siempre usará la versión más nueva del Launch Template
+    version = "$Latest" 
+  }
+  
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 50 
+    }
   }
 
-  tag {
-    key                 = "Name"
-    value               = "web-app-instance"
-    propagate_at_launch = true
+  lifecycle {
+    ignore_changes = [
+      desired_capacity,
+    ]
   }
 }
+
 
 # 1. Application Load Balancer (ALB)
 resource "aws_lb" "web_lb" {
