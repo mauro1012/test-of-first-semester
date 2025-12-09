@@ -1,28 +1,33 @@
-# create Vpd and sypplier
-
+# Configure AWS provider
 provider "aws" {
   region = var.aws_region
 }
 
+# Data source for default VPC
 data "aws_vpc" "default" {
   default = true
 }
 
-data "aws_subnets" "default" {
+# Data source for public subnets in different Availability Zones (Required for ALB)
+data "aws_subnets" "public_subnets" {
   filter {
     name   = "vpc-id"
     values = [data.aws_vpc.default.id]
   }
+  # Filter for public subnets
+  filter {
+    name   = "map-public-ip-on-launch"
+    values = ["true"]
+  }
 }
 
-# Security Group to allow HTTP traffic
-
+# Security Group to allow HTTP traffic (Port 80)
 resource "aws_security_group" "web_sg" {
   name        = "web-access-sg"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    description = "HTTP desde Internet"
+    description = "HTTP from Internet"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -37,8 +42,7 @@ resource "aws_security_group" "web_sg" {
   }
 }
 
-#User Data to install Docker and run the container
-
+# User Data script to install Docker and run the container
 locals {
   user_data = <<-EOT
     #!/bin/bash
@@ -46,13 +50,12 @@ locals {
     sudo amazon-linux-extras install docker -y
     sudo service docker start
     sudo usermod -a -G docker ec2-user
-    # Ejecuta tu contenedor Docker
+    # Run the Docker container
     sudo docker run -d -p 80:80 ${var.image_repo_name}
     EOT
 }
 
-# Launch Template y Auto Scaling Group (ASG)
-
+# Data source for the Amazon Linux AMI
 data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
@@ -63,6 +66,7 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
+# Launch Template definition
 resource "aws_launch_template" "web_lt" {
   name_prefix   = "web-app-lt"
   image_id      = data.aws_ami.amazon_linux.id
@@ -72,9 +76,11 @@ resource "aws_launch_template" "web_lt" {
   user_data     = base64encode(local.user_data)
 }
 
+# Auto Scaling Group (ASG) configuration
 resource "aws_autoscaling_group" "web_asg" {
   name                      = "web-app-asg"
-  vpc_zone_identifier       = data.aws_subnets.default.ids
+  # Use public subnets from different AZs
+  vpc_zone_identifier       = data.aws_subnets.public_subnets.ids 
   min_size                  = 2 
   max_size                  = 4
   desired_capacity          = 2
@@ -91,18 +97,17 @@ resource "aws_autoscaling_group" "web_asg" {
   }
 }
 
-# Create loud Balance
-
-# 1. ALB
+# 1. Application Load Balancer (ALB)
 resource "aws_lb" "web_lb" {
   name               = "web-app-lb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.web_sg.id]
-  subnets            = data.aws_subnets.default.ids
+  # Use public subnets to satisfy the multi-AZ requirement
+  subnets            = data.aws_subnets.public_subnets.ids 
 }
 
-# 2. Target Group 
+# 2. Target Group (where traffic is sent)
 resource "aws_lb_target_group" "web_tg" {
   name     = "web-app-tg"
   port     = 80
@@ -110,7 +115,7 @@ resource "aws_lb_target_group" "web_tg" {
   vpc_id   = data.aws_vpc.default.id
 
   health_check {
-    path                = "/" # Comprueba la raíz del sitio
+    path                = "/" 
     protocol            = "HTTP"
     matcher             = "200"
     interval            = 30
@@ -120,7 +125,7 @@ resource "aws_lb_target_group" "web_tg" {
   }
 }
 
-# 3. Listener (listens to requests in the ALB and forwards them to the TG)
+# 3. Listener (listens on ALB port 80 and forwards to TG)
 resource "aws_lb_listener" "web_listener" {
   load_balancer_arn = aws_lb.web_lb.arn
   port              = "80"
@@ -132,7 +137,7 @@ resource "aws_lb_listener" "web_listener" {
   }
 }
 
-# 4. Connect ESG to Target Group
+# 4. Attach ASG to Target Group
 resource "aws_autoscaling_attachment" "asg_attachment" {
   autoscaling_group_name = aws_autoscaling_group.web_asg.id
   lb_target_group_arn    = aws_lb_target_group.web_tg.arn
