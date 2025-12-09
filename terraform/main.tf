@@ -21,7 +21,9 @@ data "aws_subnets" "public_subnets" {
   }
 }
 
-
+# NUEVO RECURSO: Trigger para forzar la actualización del Launch Template
+# Este recurso se actualiza cada vez que la variable de la imagen cambia,
+# forzando una nueva versión del Launch Template.
 resource "null_resource" "app_update_trigger" {
   triggers = {
     image_name = var.image_repo_name
@@ -30,7 +32,6 @@ resource "null_resource" "app_update_trigger" {
 
 # Security Group to allow HTTP traffic (Port 80)
 resource "aws_security_group" "web_sg" {
-  # Asegúrate de haber cambiado este nombre si el anterior falló por duplicidad.
   name        = "web-access-sg" 
   vpc_id      = data.aws_vpc.default.id
 
@@ -50,7 +51,7 @@ resource "aws_security_group" "web_sg" {
   }
 }
 
-# User Data script to install Docker and run the container (Limpio)
+# User Data script to install Docker and run the container
 locals {
   user_data = <<-EOT
     #!/bin/bash
@@ -83,7 +84,7 @@ resource "aws_launch_template" "web_lt" {
   vpc_security_group_ids = [aws_security_group.web_sg.id]
   user_data     = base64encode(local.user_data)
   
-
+  # CONEXIÓN: Asegura que el Launch Template dependa del trigger de actualización
   depends_on = [null_resource.app_update_trigger]
 }
 
@@ -100,21 +101,13 @@ resource "aws_autoscaling_group" "web_asg" {
     id      = aws_launch_template.web_lt.id
     version = "$Latest" 
   }
-  
-  instance_refresh {
-    strategy = "Rolling"
-    preferences {
-      min_healthy_percentage = 50 
-    }
-  }
 
-  lifecycle {
-    ignore_changes = [
-      desired_capacity,
-    ]
+  tag {
+    key                 = "Name"
+    value               = "web-app-instance"
+    propagate_at_launch = true
   }
 }
-
 
 # 1. Application Load Balancer (ALB)
 resource "aws_lb" "web_lb" {
@@ -128,7 +121,6 @@ resource "aws_lb" "web_lb" {
 
 # 2. Target Group (where traffic is sent)
 resource "aws_lb_target_group" "web_tg" {
-  # Asegúrate de haber cambiado este nombre si el anterior falló por duplicidad.
   name     = "web-app-tg" 
   port     = 80
   protocol = "HTTP"
@@ -161,4 +153,56 @@ resource "aws_lb_listener" "web_listener" {
 resource "aws_autoscaling_attachment" "asg_attachment" {
   autoscaling_group_name = aws_autoscaling_group.web_asg.id
   lb_target_group_arn    = aws_lb_target_group.web_tg.arn
+}
+
+
+## 1. Política de CPU (Target: 60% Average CPU Utilization)
+# Esta política gestiona el escalado de entrada y salida para mantener el objetivo de CPU.
+resource "aws_autoscaling_policy" "scale_target_cpu" {
+  name                   = "target-cpu-60-policy"
+  policy_type            = "TargetTrackingScaling"
+  autoscaling_group_name = aws_autoscaling_group.web_asg.name
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    # Objetivo: Mantener el uso promedio de CPU en 60%
+    target_value = 60.0
+  }
+}
+
+## 2. Política de Memoria (Target: 75% Average Memory Utilization)
+# REQUIERE que el CloudWatch Agent esté instalado y enviando la métrica "MemoryUtilization".
+resource "aws_autoscaling_policy" "scale_target_memory" {
+  name                   = "target-memory-75-policy"
+  policy_type            = "TargetTrackingScaling"
+  autoscaling_group_name = aws_autoscaling_group.web_asg.name
+
+  target_tracking_configuration {
+    customized_metric_specification {
+      metric_name = "MemoryUtilization" # Métric Name from CWAgent
+      namespace   = "CWAgent"
+      statistic   = "Average"
+      unit        = "Percent"
+    }
+    # Objetivo: Mantener el uso promedio de memoria en 75%
+    target_value = 75.0
+  }
+}
+
+## 3. Política de Red (Network In - Target: 10 MB/s de Entrada)
+# Esta política escala si el tráfico de red de entrada es alto.
+resource "aws_autoscaling_policy" "scale_target_network_in" {
+  name                   = "target-network-in-policy"
+  policy_type            = "TargetTrackingScaling"
+  autoscaling_group_name = aws_autoscaling_group.web_asg.name
+
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGNetworkIn"
+    }
+    # Objetivo: Mantener el tráfico promedio de entrada alrededor de 10,000,000 bytes/segundo (aprox. 10 MB/s)
+    target_value = 10000000.0 
+  }
 }
