@@ -50,6 +50,7 @@ locals {
     sudo amazon-linux-extras install docker -y
     sudo service docker start
     sudo usermod -a -G docker ec2-user
+    sudo docker rmi ${var.image_repo_name}
     # Run the Docker container
     sudo docker run -d -p 80:80 ${var.image_repo_name}
     EOT
