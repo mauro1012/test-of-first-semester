@@ -21,9 +21,17 @@ data "aws_subnets" "public_subnets" {
   }
 }
 
+
+resource "null_resource" "app_update_trigger" {
+  triggers = {
+    image_name = var.image_repo_name
+  }
+}
+
 # Security Group to allow HTTP traffic (Port 80)
 resource "aws_security_group" "web_sg" {
-  name        = "web-access-sg"
+  # Asegúrate de haber cambiado este nombre si el anterior falló por duplicidad.
+  name        = "web-access-sg" 
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -42,7 +50,7 @@ resource "aws_security_group" "web_sg" {
   }
 }
 
-# User Data script to install Docker and run the container
+# User Data script to install Docker and run the container (Limpio)
 locals {
   user_data = <<-EOT
     #!/bin/bash
@@ -50,7 +58,6 @@ locals {
     sudo amazon-linux-extras install docker -y
     sudo service docker start
     sudo usermod -a -G docker ec2-user
-    sudo docker rmi ${var.image_repo_name}
     # Run the Docker container
     sudo docker run -d -p 80:80 ${var.image_repo_name}
     EOT
@@ -75,6 +82,9 @@ resource "aws_launch_template" "web_lt" {
   key_name      = "conect_instance"
   vpc_security_group_ids = [aws_security_group.web_sg.id]
   user_data     = base64encode(local.user_data)
+  
+
+  depends_on = [null_resource.app_update_trigger]
 }
 
 # Auto Scaling Group (ASG) configuration
@@ -88,7 +98,7 @@ resource "aws_autoscaling_group" "web_asg" {
 
   launch_template {
     id      = aws_launch_template.web_lt.id
-    version = "$Latest"
+    version = "$Latest" # Esto siempre usará la versión más nueva del Launch Template
   }
 
   tag {
@@ -110,7 +120,8 @@ resource "aws_lb" "web_lb" {
 
 # 2. Target Group (where traffic is sent)
 resource "aws_lb_target_group" "web_tg" {
-  name     = "web-app-tg"
+  # Asegúrate de haber cambiado este nombre si el anterior falló por duplicidad.
+  name     = "web-app-tg" 
   port     = 80
   protocol = "HTTP"
   vpc_id   = data.aws_vpc.default.id
