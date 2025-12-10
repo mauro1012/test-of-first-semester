@@ -80,7 +80,7 @@ resource "aws_launch_template" "web_lt" {
   name_prefix   = "web-app-lt"
   image_id      = data.aws_ami.amazon_linux.id
   instance_type = var.instance_type
-  key_name      = "conect_instance"
+  key_name      = "vockey"
   vpc_security_group_ids = [aws_security_group.web_sg.id]
   user_data     = base64encode(local.user_data)
   
